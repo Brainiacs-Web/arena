@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Exam Battle Arena</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background-color: #f4f4f4;
+      padding: 50px;
+    }
+    h1, h2 {
+      color: #333;
+    }
+    button {
+      padding: 10px 20px;
+      margin: 10px;
+      cursor: pointer;
+      background-color: #28a745;
+      color: white;
+      border: none;
+      border-radius: 5px;
+    }
+    button:hover {
+      background-color: #218838;
+    }
+    input, select {
+      padding: 8px;
+      margin: 10px;
+    }
+    #playerList {
+      margin: 10px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <!-- Login Screen -->
+  <div id="loginScreen">
+    <h1>Exam Battle Arena</h1>
+    <input type="text" id="playerName" placeholder="Enter your name" />
+    <select id="subject">
+      <option value="math">Math</option>
+      <option value="science">Science</option>
+    </select>
+    <br />
+    <button onclick="createRoom()">Create Room</button>
+    <button onclick="joinRoom()">Join Room</button>
+  </div>
+
+  <!-- Lobby Screen -->
+  <div id="lobby" style="display:none;">
+    <h2>Waiting for players...</h2>
+    <p>Room ID: <span id="roomId"></span></p>
+    <p id="playerList"></p>
+    <!-- Only the room creator (host) sees this button -->
+    <button id="startGameBtn" onclick="startGame()" style="display:none;">Start Game</button>
+  </div>
+
+  <!-- Game Screen -->
+  <div id="gameScreen" style="display:none;">
+    <h2>Exam Battle</h2>
+    <p>Question: <span id="question"></span></p>
+    <input type="text" id="answer" placeholder="Your Answer" />
+    <button onclick="submitAnswer()">Submit</button>
+    <p>Time Left: <span id="timer">30</span>s</p>
+    <p>Score: <span id="score">0</span></p>
+  </div>
+
+  <!-- Result Screen -->
+  <div id="resultScreen" style="display:none;">
+    <h2>Game Over!</h2>
+    <p id="winner"></p>
+    <button onclick="restart()">Play Again</button>
+  </div>
+
+  <!-- Firebase SDKs -->
+  <!-- Firebase App (the core Firebase SDK) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+  <!-- Firebase Realtime Database -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+  
+  <script>
+    // Replace with your Firebase project configuration
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+      databaseURL: "https://YOUR_PROJECT_ID.firebaseio.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT_ID.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // Global Variables
+    let playerName, subject, roomId;
+    let score = 0;
+    let timeLeft = 30;
+    let interval;
+    let currentQuestion;
+    let localPlayerKey; // Unique key for this player within the room
+
+    // Questions sets
+    const questions = {
+      math: [
+        { q: "5 + 3", a: "8" },
+        { q: "10 - 7", a: "3" },
+        { q: "6 x 2", a: "12" }
+      ],
+      science: [
+        { q: "What planet is closest to the sun?", a: "Mercury" },
+        { q: "H2O is the chemical formula for?", a: "Water" }
+      ]
+    };
+
+    // Create a room
+    function createRoom() {
+      playerName = document.getElementById("playerName").value.trim();
+      subject = document.getElementById("subject").value;
+      if (!playerName) return alert("Enter your name!");
+
+      // Generate a random room ID
+      roomId = Math.floor(Math.random() * 10000).toString();
+      document.getElementById("roomId").innerText = roomId;
+
+      // Set up room data in Firebase
+      db.ref("rooms/" + roomId).set({
+        subject: subject,
+        host: playerName,
+        gameStarted: false,
+        timer: timeLeft
+      });
+
+      // Add the host to the players list
+      const playerRef = db.ref("rooms/" + roomId + "/players").push();
+      localPlayerKey = playerRef.key;
+      playerRef.set({
+        name: playerName,
+        score: 0
+      });
+
+      setupLobbyListeners();
+      document.getElementById("loginScreen").style.display = "none";
+      document.getElementById("lobby").style.display = "block";
+      document.getElementById("startGameBtn").style.display = "inline-block"; // Host can start game
+    }
+
+    // Join an existing room
+    function joinRoom() {
+      playerName = document.getElementById("playerName").value.trim();
+      subject = document.getElementById("subject").value; // subject can be used for filtering if needed
+      if (!playerName) return alert("Enter your name!");
+
+      roomId = prompt("Enter Room ID:");
+      if (!roomId) return;
+
+      document.getElementById("roomId").innerText = roomId;
+
+      // Add player to the room in Firebase
+      const playerRef = db.ref("rooms/" + roomId + "/players").push();
+      localPlayerKey = playerRef.key;
+      playerRef.set({
+        name: playerName,
+        score: 0
+      });
+
+      setupLobbyListeners();
+      document.getElementById("loginScreen").style.display = "none";
+      document.getElementById("lobby").style.display = "block";
+      document.getElementById("startGameBtn").style.display = "none"; // Only host can start the game
+    }
+
+    // Listen for updates in the lobby (players list, game start, etc.)
+    function setupLobbyListeners() {
+      // Update players list
+      db.ref("rooms/" + roomId + "/players").on("value", (snapshot) => {
+        const playersData = snapshot.val() || {};
+        const names = Object.values(playersData).map(p => p.name);
+        document.getElementById("playerList").innerText = "Players: " + names.join(", ");
+      });
+
+      // Listen for game start
+      db.ref("rooms/" + roomId + "/gameStarted").on("value", (snapshot) => {
+        if (snapshot.val() === true) {
+          // Hide lobby and show game screen
+          document.getElementById("lobby").style.display = "none";
+          document.getElementById("gameScreen").style.display = "block";
+          startLocalTimer();
+        }
+      });
+
+      // Listen for question updates
+      db.ref("rooms/" + roomId + "/currentQuestion").on("value", (snapshot) => {
+        const qData = snapshot.val();
+        if (qData) {
+          currentQuestion = qData;
+          document.getElementById("question").innerText = currentQuestion.q;
+          document.getElementById("answer").value = "";
+        }
+      });
+
+      // Listen for timer updates
+      db.ref("rooms/" + roomId + "/timer").on("value", (snapshot) => {
+        const t = snapshot.val();
+        document.getElementById("timer").innerText = t;
+        if (t <= 0) {
+          endGame();
+        }
+      });
+    }
+
+    // Start the game (only host should do this)
+    function startGame() {
+      // Update the gameStarted flag in Firebase
+      db.ref("rooms/" + roomId).update({
+        gameStarted: true
+      });
+      // Host sends the first question and starts the timer
+      sendQuestion();
+      startHostTimer();
+    }
+
+    // Host timer: only the room creator updates the timer in Firebase
+    function startHostTimer() {
+      let t = timeLeft;
+      const timerRef = db.ref("rooms/" + roomId + "/timer");
+      timerRef.set(t);
+      interval = setInterval(() => {
+        t--;
+        timerRef.set(t);
+        if (t <= 0) {
+          clearInterval(interval);
+        }
+      }, 1000);
+    }
+
+    // Local timer (for players joining after start) - listens to Firebase timer
+    function startLocalTimer() {
+      // The local timer is updated via Firebase listeners in setupLobbyListeners
+    }
+
+    // Send a new question from the host
+    function sendQuestion() {
+      db.ref("rooms/" + roomId).once("value").then(snapshot => {
+        const roomData = snapshot.val();
+        if (!roomData) return;
+        const qs = questions[roomData.subject] || [];
+        if (qs.length === 0) return;
+        const randomIndex = Math.floor(Math.random() * qs.length);
+        const selected = qs[randomIndex];
+        db.ref("rooms/" + roomId).update({
+          currentQuestion: selected
+        });
+      });
+    }
+
+    // Submit answer (for all players)
+    function submitAnswer() {
+      const answer = document.getElementById("answer").value.trim();
+      if (!currentQuestion) return;
+      // Check answer locally (you could also have the host validate, then update score in Firebase)
+      if (answer.toLowerCase() === currentQuestion.a.toLowerCase()) {
+        score++;
+        document.getElementById("score").innerText = score;
+        // Update score in Firebase for this player
+        db.ref("rooms/" + roomId + "/players/" + localPlayerKey).update({
+          score: score
+        });
+      }
+      // Send a new question (host could control question flow; here we let everyone trigger it)
+      sendQuestion();
+    }
+
+    // End game: hide game screen and show results
+    function endGame() {
+      document.getElementById("gameScreen").style.display = "none";
+      document.getElementById("resultScreen").style.display = "block";
+
+      // Determine the winner by reading all players' scores from Firebase
+      db.ref("rooms/" + roomId + "/players").once("value").then(snapshot => {
+        const playersData = snapshot.val() || {};
+        let winner = '';
+        let maxScore = -1;
+        Object.values(playersData).forEach(player => {
+          if (player.score > maxScore) {
+            maxScore = player.score;
+            winner = player.name;
+          }
+        });
+        document.getElementById("winner").innerText = `Game Over! ${winner} wins with ${maxScore} points!`;
+      });
+    }
+
+    // Restart game (reload the page)
+    function restart() {
+      location.reload();
+    }
+  </script>
+</body>
+</html>
